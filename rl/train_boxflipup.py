@@ -49,7 +49,7 @@ def main():
 
     if args.wandb:
         run = wandb.init(
-            project="BoxFlipUp-v0",
+            project=config["env_name"],
             config=config,
             sync_tensorboard=True,  # auto-upload sb3's tensorboard metrics
             monitor_gym=True,  # auto-upload videos
@@ -64,7 +64,7 @@ def main():
     if args.train_single_env:
         meshcat = StartMeshcat()
         env = gym.make(
-            "BoxFlipUp-v0",
+            config["env_name"],
             meshcat=meshcat,
             observations=config["observations"],
             time_limit=config["env_time_limit"],
@@ -73,7 +73,7 @@ def main():
         input("Open meshcat (optional). Press Enter to continue...")
     else:
         env = make_vec_env(
-            "BoxFlipUp-v0",
+            config["env_name"],
             n_envs=num_cpu,
             seed=0,
             vec_env_cls=SubprocVecEnv,
@@ -84,13 +84,48 @@ def main():
         )
 
     if args.test:
-        model = PPO("MlpPolicy", env, n_steps=4, n_epochs=2, batch_size=8)
+        model = PPO(
+            config["policy_type"], env, n_steps=4, n_epochs=2, batch_size=8
+        )
     elif os.path.exists(zip):
         model = PPO.load(zip, env, verbose=1, tensorboard_log=f"runs/{run.id}")
     else:
         model = PPO(
-            "MlpPolicy", env, verbose=1, tensorboard_log=f"runs/{run.id}"
+            config["policy_type"],
+            env,
+            verbose=1,
+            tensorboard_log=f"runs/{run.id}",
         )
+
+    # Separate evaluation env.
+    eval_env = gym.make(
+        config["env_name"],
+        observations=config["observations"],
+        time_limit=config["env_time_limit"],
+    )
+    eval_env = DummyVecEnv([lambda: eval_env])
+    # Record a video every n evaluation rollouts.
+    n = 1
+    eval_env = VecVideoRecorder(
+        eval_env,
+        log_dir + f"videos/test",
+        record_video_trigger=lambda x: x % n == 0,
+        video_length=100,
+    )
+    # Use deterministic actions for evaluation.
+    eval_callback = EvalCallback(
+        eval_env,
+        best_model_save_path=log_dir + f"eval_logs/test",
+        log_path=log_dir + f"eval_logs/test",
+        eval_freq=eval_freq,
+        deterministic=True,
+        render=False,
+    )
+
+    model.learn(
+        total_timesteps=total_timesteps,
+        callback=eval_callback,
+    )
 
     new_log = True
     while True:

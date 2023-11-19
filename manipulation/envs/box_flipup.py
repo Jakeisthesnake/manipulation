@@ -3,15 +3,21 @@ import numpy as np
 from pydrake.all import (
     AddMultibodyPlantSceneGraph,
     Box,
+    CameraInfo,
+    ClippingRange,
+    ColorRenderCamera,
     ConstantVectorSource,
     ContactVisualizer,
     ContactVisualizerParams,
+    DepthRange,
+    DepthRenderCamera,
     DiagramBuilder,
     DiscreteContactSolver,
     EventStatus,
     FixedOffsetFrame,
     InverseDynamicsController,
     LeafSystem,
+    MakeRenderEngineVtk,
     MeshcatVisualizer,
     MultibodyPlant,
     Multiplexer,
@@ -20,7 +26,11 @@ from pydrake.all import (
     PlanarJoint,
     PrismaticJoint,
     RandomGenerator,
+    RenderCameraCore,
+    RenderEngineVtkParams,
+    RgbdSensor,
     RigidTransform,
+    RollPitchYaw,
     RotationMatrix,
     Simulator,
     SpatialInertia,
@@ -216,6 +226,39 @@ def make_box_flipup(
     builder.Connect(actions.get_output_port(), reward.get_input_port(2))
     builder.ExportOutput(reward.get_output_port(), "reward")
 
+    # Add camera for video monitoring.
+    scene_graph.AddRenderer(
+        "renderer", MakeRenderEngineVtk(RenderEngineVtkParams())
+    )
+    color_camera = ColorRenderCamera(
+        RenderCameraCore(
+            "renderer",
+            CameraInfo(width=640, height=480, fov_y=np.pi / 4),
+            ClippingRange(0.01, 10.0),
+            RigidTransform(),
+        ),
+        False,
+    )
+    depth_camera = DepthRenderCamera(
+        color_camera.core(), DepthRange(0.01, 10.0)
+    )
+    X_PB = RigidTransform(
+        RollPitchYaw(-np.pi / 2, 0, 0), np.array([0, -1.5, 0.1])
+    )
+    rgbd_camera = builder.AddSystem(
+        RgbdSensor(
+            parent_id=scene_graph.world_frame_id(),
+            X_PB=X_PB,
+            color_camera=color_camera,
+            depth_camera=depth_camera,
+        )
+    )
+    builder.Connect(
+        scene_graph.get_query_output_port(),
+        rgbd_camera.query_object_input_port(),
+    )
+    builder.ExportOutput(rgbd_camera.color_image_output_port(), "color_image")
+
     # Set random state distributions.
     uniform_random = Variable(
         name="uniform_random", type=Variable.Type.RANDOM_UNIFORM
@@ -282,6 +325,7 @@ def BoxFlipUpEnv(observations="state", meshcat=None, time_limit=10):
         reward="reward",
         action_port_id="actions",
         observation_port_id="observations",
+        render_rgb_port_id="color_image",
     )
 
     #    from stable_baselines3.common.monitor import Monitor
